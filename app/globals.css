@@ -7,9 +7,35 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+
+  /* Semantic spacing (4px-aligned rhythm) */
+  --spacing-page-x: 1.25rem;
+  --spacing-page-y: 1rem;
+  --spacing-section: 3rem;
+  --spacing-stack: 1rem;
+  --spacing-inline: 0.75rem;
+  --spacing-tight: 0.5rem;
+
+  /* Semantic type scale */
+  --text-display: 2.25rem;
+  --text-display--line-height: 2.5rem;
+  --text-display--letter-spacing: -0.02em;
+  --text-title: 1.5rem;
+  --text-title--line-height: 2rem;
+  --text-title--letter-spacing: -0.01em;
+  --text-subtitle: 1.125rem;
+  --text-subtitle--line-height: 1.75rem;
+  --text-lead: 1.125rem;
+  --text-lead--line-height: 1.75rem;
+  --text-body: 1rem;
+  --text-body--line-height: 1.5rem;
+  --text-small: 0.875rem;
+  --text-small--line-height: 1.25rem;
+  --text-code: 0.875rem;
+  --text-code--line-height: 1.5rem;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -122,9 +148,31 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground text-body;
   }
   html {
     @apply font-sans;
+  }
+  h1 {
+    @apply font-heading text-display font-semibold tracking-[var(--text-display--letter-spacing)] text-foreground;
+  }
+  h2 {
+    @apply font-heading text-title font-semibold tracking-[var(--text-title--letter-spacing)] text-foreground;
+  }
+  h3 {
+    @apply font-heading text-subtitle font-semibold text-foreground;
+  }
+  h4 {
+    @apply font-heading text-body font-semibold text-foreground;
+  }
+  h5,
+  h6 {
+    @apply font-heading text-small font-semibold text-foreground;
+  }
+  p {
+    @apply text-body text-foreground;
+  }
+  code {
+    @apply font-mono text-code rounded-md bg-muted px-1 py-0.5;
   }
 }
