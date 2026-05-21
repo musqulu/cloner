@@ -1,21 +1,25 @@
 "use client"
 
 import { useEffect, useRef, useCallback, useMemo, useState } from "react"
-import { Download, RotateCcw, Loader2 } from "lucide-react"
 
-import { Stack } from "@/components/layout/stack"
-import { Inline } from "@/components/layout/inline"
-import { Heading } from "@/components/typography/heading"
-import { Text } from "@/components/typography/text"
-import { Button } from "@/components/ui/button"
 import { useWebcam } from "@/hooks/use-webcam"
 import { uploadSessionAsset } from "@/lib/cloner/upload-session-asset"
 import type { UiCopy } from "@/lib/cloner/ui-copy"
 
 const FALLBACK_RECORDING_MS = 18_000
-const POST_AVATAR_REACTION_MS = 5_000
+const TARGET_RECORDING_MS = 20_000
+const BLACK_AFTER_CLONE_MS = 1_250
+const ARCHIVE_MESSAGE_MS = 1_500
+const ARCHIVE_GLITCH_MS = 300
+const MIN_FINAL_NUMBER_MS = 1_000
 const COMPOSITE_WIDTH = 1920
 const COMPOSITE_HEIGHT = 1080
+const ARCHIVE_MESSAGES = ["Zapis zakończony.", "Tożsamość zarchiwizowana."] as const
+
+type ArchiveDisplayState = {
+  text: string | null
+  glitch: boolean
+}
 
 function drawVideoContain(
   ctx: CanvasRenderingContext2D,
@@ -45,20 +49,99 @@ function drawVideoContain(
   ctx.restore()
 }
 
+function getArchiveDisplayState(
+  startedAt: number | null,
+  now: number,
+  archiveLabel: string
+): ArchiveDisplayState {
+  if (startedAt === null) return { text: null, glitch: false }
+
+  const elapsed = now - startedAt
+  if (elapsed < BLACK_AFTER_CLONE_MS) return { text: null, glitch: false }
+
+  const firstStart = BLACK_AFTER_CLONE_MS
+  const secondStart = firstStart + ARCHIVE_MESSAGE_MS
+  const numberStart = secondStart + ARCHIVE_MESSAGE_MS
+
+  if (elapsed < secondStart) {
+    return {
+      text: ARCHIVE_MESSAGES[0],
+      glitch: elapsed - firstStart < ARCHIVE_GLITCH_MS,
+    }
+  }
+
+  if (elapsed < numberStart) {
+    return {
+      text: ARCHIVE_MESSAGES[1],
+      glitch: elapsed - secondStart < ARCHIVE_GLITCH_MS,
+    }
+  }
+
+  return {
+    text: archiveLabel || null,
+    glitch: elapsed - numberStart < ARCHIVE_GLITCH_MS,
+  }
+}
+
+function drawArchivePane(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  state: ArchiveDisplayState,
+  now: number
+) {
+  ctx.save()
+  ctx.fillStyle = "#020202"
+  ctx.fillRect(x, y, width, height)
+
+  ctx.strokeStyle = "rgba(255,255,255,0.07)"
+  ctx.lineWidth = 1
+  ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1)
+
+  if (!state.text) {
+    ctx.restore()
+    return
+  }
+
+  const centerX = x + width / 2
+  const centerY = y + height / 2
+  ctx.textAlign = "center"
+  ctx.textBaseline = "middle"
+  ctx.font = state.text.startsWith("#")
+    ? "500 48px ui-monospace, SFMono-Regular, Menlo, monospace"
+    : "400 34px ui-monospace, SFMono-Regular, Menlo, monospace"
+
+  if (state.glitch) {
+    const jitter = Math.sin(now * 0.11) * 6
+    ctx.fillStyle = "rgba(255,255,255,0.32)"
+    ctx.fillText(state.text, centerX - jitter, centerY - 1)
+    ctx.fillText(state.text, centerX + jitter * 0.55, centerY + 1)
+
+    ctx.fillStyle = "rgba(255,255,255,0.12)"
+    for (let i = 0; i < 8; i += 1) {
+      const bandY = y + ((now * (0.03 + i * 0.004) + i * 87) % height)
+      const bandX = x + ((i * 113 + now * 0.04) % width)
+      ctx.fillRect(bandX, bandY, 24 + i * 9, 1 + (i % 2))
+    }
+  }
+
+  ctx.fillStyle = "rgba(255,255,255,0.92)"
+  ctx.fillText(state.text, centerX, centerY)
+  ctx.restore()
+}
+
 export function ReactionStep({
-  onReset,
-  generatedScript,
   cloneVideoUrl,
-  generationWarning,
+  archiveLabel,
   photo,
   sessionId,
   copy,
   onReactionUploaded,
 }: {
-  onReset: () => void
-  generatedScript: string
   cloneVideoUrl: string | null
-  generationWarning?: string | null
+  archiveLabel: string | null
   photo: Blob | null
   sessionId: string
   copy: UiCopy
@@ -70,7 +153,7 @@ export function ReactionStep({
     unavailableMessage: copy.photo.cameraUnavailable,
   })
   const [isRecording, setIsRecording] = useState(false)
-  const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
+  const [, setRecordingUrl] = useState<string | null>(null)
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null)
   const [rawReactionBlob, setRawReactionBlob] = useState<Blob | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -82,16 +165,27 @@ export function ReactionStep({
   const micStreamRef = useRef<MediaStream | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const recordingStartedRef = useRef(false)
+  const recordingBeganAtRef = useRef<number | null>(null)
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const postAvatarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const archiveStartedAtRef = useRef<number | null>(null)
   const cloneVideoRef = useRef<HTMLVideoElement>(null)
-  const [isSavingReaction, setIsSavingReaction] = useState(false)
-  const [isSavingRawReaction, setIsSavingRawReaction] = useState(false)
-  const [savedFinalPath, setSavedFinalPath] = useState<string | null>(null)
-  const [savedRawReactionPath, setSavedRawReactionPath] = useState<string | null>(null)
-  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [archiveStartedAt, setArchiveStartedAt] = useState<number | null>(null)
+  const [archiveClock, setArchiveClock] = useState(0)
   const uploadGenRef = useRef(0)
   const rawUploadGenRef = useRef(0)
+  const archiveDisplayLabel = archiveLabel || "#-----"
+  const archiveDisplay = getArchiveDisplayState(
+    archiveStartedAt,
+    archiveClock,
+    archiveDisplayLabel
+  )
+
+  useEffect(() => {
+    if (archiveStartedAt !== null && !archiveLabel) {
+      console.warn("[reaction-step] archive label missing; final number hidden")
+    }
+  }, [archiveStartedAt, archiveLabel])
 
   const photoPreviewUrl = useMemo(() => {
     if (!photo) return null
@@ -108,6 +202,21 @@ export function ReactionStep({
     return () => stop()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (archiveStartedAt === null) return
+    let frame: number | null = null
+
+    const tick = (now: number) => {
+      setArchiveClock(now)
+      frame = requestAnimationFrame(tick)
+    }
+
+    frame = requestAnimationFrame(tick)
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
+  }, [archiveStartedAt])
 
   const clearFallbackTimer = useCallback(() => {
     if (fallbackTimerRef.current) {
@@ -165,9 +274,24 @@ export function ReactionStep({
 
   const handleCloneVideoEnded = useCallback(() => {
     if (postAvatarTimerRef.current) return
+    const now = performance.now()
+    archiveStartedAtRef.current = now
+    setArchiveStartedAt(now)
+    setArchiveClock(now)
+
+    const elapsedRecording = recordingBeganAtRef.current
+      ? now - recordingBeganAtRef.current
+      : 0
+    const minimumArchiveSequenceMs =
+      BLACK_AFTER_CLONE_MS +
+      ARCHIVE_MESSAGE_MS * ARCHIVE_MESSAGES.length +
+      MIN_FINAL_NUMBER_MS
+    const remainingTargetMs = Math.max(0, TARGET_RECORDING_MS - elapsedRecording)
+    const stopAfterMs = Math.max(remainingTargetMs, minimumArchiveSequenceMs)
+
     postAvatarTimerRef.current = setTimeout(() => {
       finishRecording()
-    }, POST_AVATAR_REACTION_MS)
+    }, stopAfterMs)
   }, [finishRecording])
 
   const startCompositeRecording = useCallback(async () => {
@@ -185,6 +309,10 @@ export function ReactionStep({
     }
 
     recordingStartedRef.current = true
+    recordingBeganAtRef.current = performance.now()
+    archiveStartedAtRef.current = null
+    setArchiveStartedAt(null)
+    setArchiveClock(0)
     chunksRef.current = []
     rawReactionChunksRef.current = []
 
@@ -192,19 +320,36 @@ export function ReactionStep({
     if (!ctx) return
 
     const draw = () => {
+      const now = performance.now()
       ctx.fillStyle = "black"
       ctx.fillRect(0, 0, COMPOSITE_WIDTH, COMPOSITE_HEIGHT)
       drawVideoContain(ctx, reactionVideo, 0, 0, COMPOSITE_WIDTH / 2, COMPOSITE_HEIGHT, {
         mirror: true,
       })
-      drawVideoContain(
-        ctx,
-        cloneVideo,
-        COMPOSITE_WIDTH / 2,
-        0,
-        COMPOSITE_WIDTH / 2,
-        COMPOSITE_HEIGHT
-      )
+      if (archiveStartedAtRef.current !== null) {
+        drawArchivePane(
+          ctx,
+          COMPOSITE_WIDTH / 2,
+          0,
+          COMPOSITE_WIDTH / 2,
+          COMPOSITE_HEIGHT,
+          getArchiveDisplayState(
+            archiveStartedAtRef.current,
+            now,
+            archiveDisplayLabel
+          ),
+          now
+        )
+      } else {
+        drawVideoContain(
+          ctx,
+          cloneVideo,
+          COMPOSITE_WIDTH / 2,
+          0,
+          COMPOSITE_WIDTH / 2,
+          COMPOSITE_HEIGHT
+        )
+      }
       drawFrameRef.current = requestAnimationFrame(draw)
     }
     draw()
@@ -320,7 +465,7 @@ export function ReactionStep({
       cloneVideo.muted = true
       await cloneVideo.play()
     })
-  }, [cloneVideoUrl, videoRef])
+  }, [archiveDisplayLabel, cloneVideoUrl, videoRef])
 
   useEffect(() => {
     if (!isActive || !cloneVideoUrl) return
@@ -343,8 +488,6 @@ export function ReactionStep({
     if (!recordingBlob) return
 
     const gen = ++uploadGenRef.current
-    setUploadError(null)
-    setIsSavingReaction(true)
 
     ;(async () => {
       try {
@@ -357,18 +500,14 @@ export function ReactionStep({
           filename
         )
         if (gen !== uploadGenRef.current) return
-        setSavedFinalPath(skipped ? null : path)
         onReactionUploaded?.(skipped ? null : path)
       } catch (err) {
         if (gen !== uploadGenRef.current) return
-        setUploadError(
+        console.warn(
+          "[reaction-step] final upload failed",
           err instanceof Error ? err.message : copy.common.uploadReactionError
         )
         onReactionUploaded?.(null)
-      } finally {
-        if (gen === uploadGenRef.current) {
-          setIsSavingReaction(false)
-        }
       }
     })()
   }, [recordingBlob, sessionId, onReactionUploaded, copy.common.uploadReactionError])
@@ -377,84 +516,35 @@ export function ReactionStep({
     if (!rawReactionBlob) return
 
     const gen = ++rawUploadGenRef.current
-    setIsSavingRawReaction(true)
 
     ;(async () => {
       try {
         const filename =
           rawReactionBlob.type.includes("mp4") ? "reaction.mp4" : "reaction.webm"
-        const { path, skipped } = await uploadSessionAsset(
+        await uploadSessionAsset(
           sessionId,
           "reaction",
           rawReactionBlob,
           filename
         )
         if (gen !== rawUploadGenRef.current) return
-        setSavedRawReactionPath(skipped ? null : path)
       } catch (err) {
         if (gen !== rawUploadGenRef.current) return
-        setUploadError(
+        console.warn(
+          "[reaction-step] raw reaction upload failed",
           err instanceof Error ? err.message : copy.common.uploadRawReactionError
         )
-      } finally {
-        if (gen === rawUploadGenRef.current) {
-          setIsSavingRawReaction(false)
-        }
       }
     })()
   }, [rawReactionBlob, sessionId, copy.common.uploadRawReactionError])
 
-  const handleStartOver = () => {
-    finishRecording()
-    onReset()
-  }
-
-  const download = useCallback(() => {
-    if (!recordingUrl) return
-    const a = document.createElement("a")
-    a.href = recordingUrl
-    a.download = `cloner-final-${Date.now()}.webm`
-    a.click()
-  }, [recordingUrl])
-
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col gap-4">
-      <div className="shrink-0 space-y-1 px-2 text-center">
-        <Heading variant="subtitle">{copy.reaction.title}</Heading>
-        <Text variant="muted">
-          {cloneVideoUrl
-            ? copy.reaction.description
-            : copy.reaction.fallbackDescription}
-        </Text>
-        {!cloneVideoUrl && generationWarning && (
-          <Text variant="small" className="mx-auto max-w-2xl text-destructive">
-            {generationWarning}
-          </Text>
-        )}
-      </div>
-
-      <div className="grid min-h-0 w-full flex-1 grid-cols-1 gap-2 lg:grid-cols-2 lg:gap-4 min-h-[min(85dvh,56rem)]">
-        {/* Live participant tile */}
-        <div className="relative min-h-[40dvh] overflow-hidden rounded-2xl bg-black ring-1 ring-white/10 lg:min-h-0">
-          <div className="absolute top-4 left-4 z-10 rounded-md bg-black/60 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm">
-            {copy.reaction.you}
-          </div>
-          {isRecording && (
-            <div className="absolute top-4 right-4 z-10 flex items-center gap-1.5 rounded-md bg-destructive/90 px-2.5 py-1 text-xs font-medium text-white">
-              <span className="relative flex size-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
-                <span className="relative inline-flex size-2 rounded-full bg-white" />
-              </span>
-              {copy.reaction.rec}
-            </div>
-          )}
+    <div className="flex min-h-0 w-full flex-1 flex-col bg-black">
+      <div className="grid min-h-0 w-full flex-1 grid-cols-2 gap-0">
+        <div className="relative min-h-0 overflow-hidden bg-black">
           <div className="absolute inset-0">
             {error ? (
-              <div className="flex h-full items-center justify-center p-6">
-                <Text variant="muted" className="text-center text-destructive">
-                  {error}
-                </Text>
-              </div>
+              <div className="h-full w-full bg-black" />
             ) : (
               <video
                 ref={videoRef}
@@ -468,22 +558,55 @@ export function ReactionStep({
           </div>
         </div>
 
-        {/* AI clone tile: video when available, otherwise photo and script fallback. */}
-        <div className="relative min-h-[40dvh] overflow-hidden rounded-2xl bg-black ring-1 ring-white/10 lg:min-h-0">
-          <div className="absolute top-4 left-4 z-10 rounded-md bg-black/60 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm">
-            {copy.reaction.clone}
-          </div>
+        <div className="relative min-h-0 overflow-hidden bg-black">
           <div className="absolute inset-0">
             {cloneVideoUrl ? (
-              <video
-                ref={cloneVideoRef}
-                src={cloneVideoUrl}
-                crossOrigin="anonymous"
-                className="h-full w-full object-cover"
-                playsInline
-                preload="auto"
-                onEnded={handleCloneVideoEnded}
-              />
+              <>
+                <video
+                  ref={cloneVideoRef}
+                  src={cloneVideoUrl}
+                  crossOrigin="anonymous"
+                  className={`h-full w-full object-cover transition-opacity duration-200 ${
+                    archiveStartedAt === null ? "opacity-100" : "opacity-0"
+                  }`}
+                  playsInline
+                  preload="auto"
+                  onEnded={handleCloneVideoEnded}
+                />
+                {archiveStartedAt !== null && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-[#020202]">
+                    <div className="absolute inset-0 ring-1 ring-inset ring-white/10" />
+                    {archiveDisplay.text && (
+                      <div
+                        className={`relative px-5 text-center font-mono tracking-normal text-white/90 ${
+                          archiveDisplay.text.startsWith("#")
+                            ? "text-3xl font-medium sm:text-4xl"
+                            : "text-lg font-normal sm:text-xl"
+                        }`}
+                        style={{
+                          filter: archiveDisplay.glitch ? "blur(0.35px)" : "none",
+                          opacity: archiveDisplay.glitch ? 0.82 : 1,
+                          transform: archiveDisplay.glitch
+                            ? `translateX(${Math.sin(archiveClock * 0.08) * 3}px)`
+                            : "translateX(0)",
+                        }}
+                      >
+                        {archiveDisplay.glitch && (
+                          <>
+                            <span className="absolute inset-0 translate-x-1 text-white/30">
+                              {archiveDisplay.text}
+                            </span>
+                            <span className="absolute inset-0 -translate-x-1 text-white/20">
+                              {archiveDisplay.text}
+                            </span>
+                          </>
+                        )}
+                        <span className="relative">{archiveDisplay.text}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             ) : photoPreviewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -492,62 +615,18 @@ export function ReactionStep({
                 className="h-full w-full object-cover"
               />
             ) : (
-              <div className="flex h-full items-center justify-center bg-muted">
-                <Text variant="muted">{copy.reaction.noPreview}</Text>
-              </div>
-            )}
-            {!cloneVideoUrl && generatedScript && (
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-4 pt-16">
-                <Text variant="small" className="text-left text-white/90 line-clamp-6">
-                  {generatedScript}
-                </Text>
-              </div>
+              <div className="h-full w-full bg-black" />
             )}
           </div>
         </div>
       </div>
 
-      <Stack gap="stack" className="shrink-0 items-center">
-        <canvas
-          ref={canvasRef}
-          width={COMPOSITE_WIDTH}
-          height={COMPOSITE_HEIGHT}
-          className="hidden"
-        />
-        {(isSavingReaction || isSavingRawReaction) && (
-          <Text variant="muted" className="flex items-center gap-2 text-sm">
-            <Loader2 className="size-4 animate-spin" />
-            {copy.reaction.saving}
-          </Text>
-        )}
-        {!isSavingReaction && savedFinalPath && (
-          <Text variant="small" className="max-w-md text-center text-muted-foreground">
-            {copy.reaction.finalSaved} {savedFinalPath}.
-          </Text>
-        )}
-        {!isSavingRawReaction && savedRawReactionPath && (
-          <Text variant="small" className="max-w-md text-center text-muted-foreground">
-            {copy.reaction.rawSaved} {savedRawReactionPath}.
-          </Text>
-        )}
-        {uploadError && (
-          <Text variant="small" className="max-w-md text-center text-destructive">
-            {uploadError} {copy.reaction.downloadFallback}
-          </Text>
-        )}
-        <Inline gap="inline" className="flex-wrap justify-center">
-          {recordingUrl && (
-            <Button variant="default" onClick={download}>
-              <Download data-icon="inline-start" />
-              {copy.reaction.download}
-            </Button>
-          )}
-          <Button variant="outline" onClick={handleStartOver}>
-            <RotateCcw data-icon="inline-start" />
-            {copy.reaction.startOver}
-          </Button>
-        </Inline>
-      </Stack>
+      <canvas
+        ref={canvasRef}
+        width={COMPOSITE_WIDTH}
+        height={COMPOSITE_HEIGHT}
+        className="hidden"
+      />
     </div>
   )
 }

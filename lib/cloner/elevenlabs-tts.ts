@@ -10,6 +10,17 @@ function outputFormat() {
   return process.env.ELEVENLABS_TTS_OUTPUT_FORMAT?.trim() || "mp3_44100_128"
 }
 
+function normalizeLanguageCode(language: string) {
+  const code = language.trim().toLowerCase()
+  if (code.startsWith("pl")) return "pl"
+  if (code.startsWith("en")) return "en"
+  return code || "pl"
+}
+
+function countWords(text: string) {
+  return text.trim().split(/\s+/).filter(Boolean).length
+}
+
 export async function generateSpeechFromVoice({
   voiceId,
   text,
@@ -26,6 +37,7 @@ export async function generateSpeechFromVoice({
 
   const modelId = process.env.ELEVENLABS_TTS_MODEL_ID || "eleven_multilingual_v2"
   const format = outputFormat()
+  const languageCode = normalizeLanguageCode(language)
   const url = `${defaultBaseUrl()}/v1/text-to-speech/${encodeURIComponent(
     voiceId
   )}?output_format=${encodeURIComponent(format)}`
@@ -34,8 +46,9 @@ export async function generateSpeechFromVoice({
     voiceIdPrefix: voiceId.slice(0, 8),
     modelId,
     outputFormat: format,
-    language,
+    languageCode,
     textLength: text.length,
+    wordCount: countWords(text),
   })
 
   const res = await fetch(url, {
@@ -47,7 +60,13 @@ export async function generateSpeechFromVoice({
     body: JSON.stringify({
       text,
       model_id: modelId,
-      language_code: language,
+      language_code: languageCode,
+      voice_settings: {
+        stability: 0.72,
+        similarity_boost: 0.82,
+        style: 0,
+        use_speaker_boost: true,
+      },
     }),
   })
 

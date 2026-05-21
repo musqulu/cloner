@@ -55,6 +55,10 @@ export async function POST(req: NextRequest) {
   const languageRaw = String(formData.get("language") ?? "en").trim()
   const language = languageRaw.slice(0, 16) || "en"
   const sessionIdRaw = String(formData.get("sessionId") ?? "").trim()
+  const archiveLabelRaw = String(formData.get("archiveLabel") ?? "").trim()
+  const archiveLabel = /^#\d{5,}$/.test(archiveLabelRaw)
+    ? archiveLabelRaw
+    : null
 
   if (sessionIdRaw && !isUuidLike(sessionIdRaw)) {
     return NextResponse.json({ error: "Invalid sessionId" }, { status: 400 })
@@ -80,12 +84,15 @@ export async function POST(req: NextRequest) {
   const ext = EXT[mime] ?? "bin"
   const filename = `recording.${ext}`
 
-  const voiceName = sessionIdRaw
-    ? `Cloner ${sessionIdRaw.slice(0, 8)}`
-    : `Cloner ${crypto.randomUUID().slice(0, 8)}`
+  const voiceName = archiveLabel
+    ? `Cloner ${archiveLabel}`
+    : sessionIdRaw
+      ? `Cloner ${sessionIdRaw.slice(0, 8)}`
+      : `Cloner ${crypto.randomUUID().slice(0, 8)}`
 
   console.log("[voice-clone] start", {
     sessionIdPrefix: sessionIdRaw ? sessionIdRaw.slice(0, 8) : null,
+    archiveLabel,
     language,
     mime,
     bytes: file.size,

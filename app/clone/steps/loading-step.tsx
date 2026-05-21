@@ -40,6 +40,7 @@ type AnalyzeCloneResponse = {
   script?: string
   cloneVideoUrl?: string | null
   cloneVideoPath?: string | null
+  archiveLabel?: string | null
   warning?: string
   error?: string
   deferred?: boolean
@@ -90,6 +91,7 @@ export function LoadingStep({
     generatedScript: string,
     cloneVideoUrl: string | null,
     cloneVideoPath: string | null,
+    archiveLabel: string | null,
     warning?: string | null
   ) => void
 }) {
@@ -255,10 +257,12 @@ export function LoadingStep({
 
           setError(data.warning ?? null)
           setProgress(100)
+          console.log("[loading-step] calling onComplete with archiveLabel:", data.archiveLabel)
           onComplete(
             data.script ?? "",
             data.cloneVideoUrl,
             data.cloneVideoPath ?? null,
+            data.archiveLabel ?? null,
             data.warning ?? readinessWarning
           )
           return

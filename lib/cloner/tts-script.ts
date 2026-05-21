@@ -1,7 +1,6 @@
 import Replicate from "replicate"
 
 const MODEL = "anthropic/claude-4.5-sonnet" as const
-const MAX_ATTEMPTS = 3
 type TtsScriptResult = {
   script: string
   source: "replicate" | "fallback"
@@ -22,48 +21,89 @@ export function buildTtsScriptPrompt(
   languageCode: string
 ): string {
   const langName = LANGUAGE_LABELS[languageCode] ?? languageCode
-  return `You are writing a short spoken monologue for text-to-speech (TTS).
+  const polishInstruction =
+    languageCode === "pl"
+      ? "\nFor Polish: use natural contemporary Polish, Polish punctuation, and Polish phrasing. Do not translate literally from English."
+      : ""
 
-The speaker shared this about themselves — use it as inspiration and tone; do not quote it verbatim the whole time:
+  return `You are generating a short synthetic statement for an experimental art project about identity, AI, and digital selfhood.
+
+The participant wrote something real and personal about their life. This input is the MOST IMPORTANT part of the task.
+
+You MUST stay very close to the participant's actual world:
+- their specific activity,
+- memory,
+- habit,
+- place,
+- object,
+- routine,
+- or experience.
+
+Do not drift into generic emotions or abstract observations.
+
+The generated statement should feel like it emerges directly from the participant's real input — as if an unsaid thought was hidden inside the original sentence.
+
+Your task:
+Generate a short private thought that feels emotionally plausible, subtle, and slightly uncomfortable.
+
+The statement should feel like:
+- something accidentally said during a late-night video call,
+- a thought that normally stays internal,
+- a moment of slight emotional exposure,
+- something believable enough that the participant could briefly wonder if they actually said it.
+
+IMPORTANT:
+- The speaker should sound unaware that they are revealing something personal.
+- The participant input should strongly shape the atmosphere, wording, and emotional direction of the response.
+- The generated text should feel connected to the exact life situation described by the participant.
+- Avoid turning the input into a metaphor or abstract philosophical reflection.
+
+Participant input:
 """
 ${personalTruth.trim()}
 """
 
-Requirements:
-- Write the monologue in ${langName}.
-- Length: about 10 seconds when read aloud at a natural pace (roughly 28–36 words total).
-- Plain text only: no markdown, no headings, no bullet points, no stage directions.
-- First person, like the speaker's own thought coming back to them: intimate, direct, and a little unsettling.
-- Make it more emotionally provocative by naming a hidden contradiction, temptation, fear, or unfinished truth implied by what they shared.
-- Keep it restrained: no slurs, sexual content, threats, criminal accusations, self-harm bait, or humiliating insults.
-- Do not quote the speaker verbatim except for one short phrase if it truly helps.
-- Output only the monologue text, nothing else.`
+Rules:
+- First person
+- Present tense
+- Spoken language, not literary writing
+- Quiet, restrained, contemporary tone
+- 35–45 words maximum
+- Should sound natural when spoken aloud for about 8–10 seconds
+- Ends unresolved or slightly interrupted
+- No drama
+- No poetry
+- No philosophy
+- No inspirational tone
+- No explicit AI commentary
+- No political content
+- No extreme confessions
+- Avoid sounding cinematic, scripted, therapeutic, or overly intelligent
+
+The statement should contain:
+- at least one concrete detail directly connected to the participant input,
+- one emotionally revealing moment,
+- one unfinished or ambiguous thought.
+
+The emotional effect should be:
+"This sounds disturbingly plausible."
+
+The text should sound like a real person casually speaking to a webcam alone at night.
+
+Write in ${langName}.${polishInstruction}
+Plain text only. Output only the statement, nothing else.
+`
 }
 
 export function fallbackTtsScript(
-  personalTruth: string,
+  _personalTruth: string,
   languageCode: string
 ): string {
-  const cleaned = personalTruth
-    .replace(/\s+/g, " ")
-    .replace(/^["']|["']$/g, "")
-    .trim()
-  const firstSentence = cleaned.split(/(?<=[.!?])\s+/)[0] || cleaned
-  const base = firstSentence.slice(0, 150).replace(/[.!?]+$/, "")
-
-  const prefixes: Record<string, string> = {
-    en: "I keep pretending this is small, but it keeps following me",
-    pl: "Udawałem, że to drobiazg, ale to ciągle za mną idzie",
+  if (languageCode === "pl") {
+    return "Widzę siebie w oknie i nagle brzmię spokojniej, niż się czuję. To chyba nie powinno być takie łatwe."
   }
 
-  const suffixes: Record<string, string> = {
-    en: "Maybe that says more about me than I wanted to admit.",
-    pl: "Może to mówi o mnie więcej, niż chciałem przyznać.",
-  }
-
-  return `${prefixes[languageCode] ?? prefixes.en}: ${base}. ${
-    suffixes[languageCode] ?? suffixes.en
-  }`
+  return "I see myself in the window and sound calmer than I feel. I do not think it should be this easy."
 }
 
 async function streamScript(replicate: Replicate, prompt: string) {
@@ -100,34 +140,19 @@ export async function generateTtsScript({
 
   const flight = (async (): Promise<TtsScriptResult> => {
     const replicate = new Replicate({ auth: token })
-    const prompt = buildTtsScriptPrompt(normalizedTruth, language)
-
-    let lastError: unknown
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        console.log("[generate-tts-script] attempt", attempt)
-        const script = await streamScript(replicate, prompt)
-        console.log("[generate-tts-script] Replicate script:\n", script)
-        return { script, source: "replicate" }
-      } catch (err) {
-        lastError = err
-        const message =
-          err instanceof Error ? err.message : "Failed to generate script."
-        console.warn("[generate-tts-script] attempt failed", {
-          attempt,
-          message,
-        })
-        if (attempt < MAX_ATTEMPTS) {
-          await new Promise((resolve) => setTimeout(resolve, 750 * attempt))
-        }
-      }
+    try {
+      console.log("[generate-tts-script] attempt", 1)
+      const prompt = buildTtsScriptPrompt(normalizedTruth, language)
+      const script = await streamScript(replicate, prompt)
+      console.log("[generate-tts-script] Replicate script:\n", script)
+      return { script, source: "replicate" }
+    } catch (err) {
+      const warning =
+        err instanceof Error ? err.message : "Failed to generate script."
+      const script = fallbackTtsScript(normalizedTruth, language)
+      console.warn("[generate-tts-script] using fallback", { warning })
+      return { script, source: "fallback", warning }
     }
-
-    const warning =
-      lastError instanceof Error ? lastError.message : "Failed to generate script."
-    const script = fallbackTtsScript(normalizedTruth, language)
-    console.warn("[generate-tts-script] using fallback", { warning })
-    return { script, source: "fallback", warning }
   })()
 
   const cleanup = () => {

@@ -25,12 +25,14 @@ function isWavBlob(blob: Blob): boolean {
 async function postVoiceClone(
   blob: Blob,
   sessionId: string,
-  language: string
+  language: string,
+  archiveLabel?: string | null
 ): Promise<Response> {
   const formData = new FormData()
   formData.append("file", blob, filenameForBlob(blob))
   formData.append("sessionId", sessionId)
   formData.append("language", language)
+  if (archiveLabel) formData.append("archiveLabel", archiveLabel)
   return fetch("/api/voice-clone", {
     method: "POST",
     body: formData,
@@ -52,14 +54,15 @@ function parseError(data: unknown): string {
 export async function cloneVoiceFromBlob(
   sessionId: string,
   blob: Blob,
-  language: string
+  language: string,
+  archiveLabel?: string | null
 ): Promise<CloneVoiceResult> {
-  let res = await postVoiceClone(blob, sessionId, language)
+  let res = await postVoiceClone(blob, sessionId, language, archiveLabel)
 
   if (!res.ok && !isWavBlob(blob)) {
     try {
       const wav = await decodeAudioBlobToWav(blob)
-      res = await postVoiceClone(wav, sessionId, language)
+      res = await postVoiceClone(wav, sessionId, language, archiveLabel)
     } catch {
       /* use first error below */
     }

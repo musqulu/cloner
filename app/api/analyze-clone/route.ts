@@ -8,7 +8,7 @@ import {
   storedAssetExists,
   uploadStoredAsset,
 } from "@/lib/cloner/storage-server"
-import { generateTtsScript } from "@/lib/cloner/tts-script"
+import { fallbackTtsScript } from "@/lib/cloner/tts-script"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -17,6 +17,7 @@ type AnalyzeClonePayload = {
   script?: string
   cloneVideoUrl?: string | null
   cloneVideoPath?: string | null
+  archiveLabel?: string | null
   warning?: string
   error?: string
   deferred?: boolean
@@ -30,6 +31,7 @@ type AnalyzeCloneResult = {
 }
 
 const generationFlights = new Map<string, Promise<AnalyzeCloneResult>>()
+const CLONE_UPLOAD_ATTEMPTS = 3
 
 function hasElevenLabsConfig() {
   return Boolean(process.env.ELEVENLABS_API_KEY?.trim())
@@ -58,6 +60,14 @@ function userFacingGenerationWarning(message: string) {
     return `Replicate video generation failed. ${message}`
   }
   return message
+}
+
+async function wait(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function countWords(text: string) {
+  return text.trim().split(/\s+/).filter(Boolean).length
 }
 
 /**
@@ -117,7 +127,7 @@ export async function POST(req: NextRequest) {
         : null
 
     if (waitingWarning || !photoStoragePath || !elevenLabsVoiceId) {
-      await upsertCloneSession(sessionId, {
+      const archive = await upsertCloneSession(sessionId, {
         status: "waiting",
         personal_truth: personalTruth.trim(),
         language,
@@ -132,6 +142,7 @@ export async function POST(req: NextRequest) {
           script: existingScript?.trim() ?? "",
           cloneVideoUrl: null as string | null,
           cloneVideoPath: null as string | null,
+          archiveLabel: archive?.archiveLabel ?? null,
           deferred: true,
           phase: "waiting",
           warning: waitingWarning,
@@ -149,7 +160,7 @@ export async function POST(req: NextRequest) {
 
     if (configError) {
       step("failed", { warning: configError })
-      await upsertCloneSession(sessionId, {
+      const archive = await upsertCloneSession(sessionId, {
         status: "failed",
         personal_truth: personalTruth.trim(),
         language,
@@ -163,6 +174,7 @@ export async function POST(req: NextRequest) {
           error: configError,
           cloneVideoUrl: null as string | null,
           cloneVideoPath: null as string | null,
+          archiveLabel: archive?.archiveLabel ?? null,
           phase: "failed",
           debugSteps,
         },
@@ -170,18 +182,23 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const canReuseScript =
-      typeof existingScript === "string" &&
-      existingScript.trim().length > 0 &&
-      existingScriptLanguage === language
-
     const cloneVideoPath = `${sessionId}/clone.mp4`
     if (await storedAssetExists(cloneVideoPath)) {
       step("clone_reused_existing_asset", { cloneVideoPath })
+      const archive = await upsertCloneSession(sessionId, {
+        status: "clone_ready",
+        personal_truth: personalTruth.trim(),
+        language,
+        photo_path: photoStoragePath,
+        elevenlabs_voice_id: elevenLabsVoiceId,
+        clone_video_path: cloneVideoPath,
+        error_message: null,
+      })
       return NextResponse.json({
-        script: canReuseScript ? existingScript.trim() : "",
+        script: "",
         cloneVideoUrl: `/api/session/asset?path=${encodeURIComponent(cloneVideoPath)}`,
         cloneVideoPath,
+        archiveLabel: archive?.archiveLabel ?? null,
         phase: "clone_uploaded",
         debugSteps,
       })
@@ -206,15 +223,20 @@ export async function POST(req: NextRequest) {
     }
 
     const generation = (async (): Promise<AnalyzeCloneResult> => {
-      const script = canReuseScript
-        ? existingScript.trim()
-        : (await generateTtsScript({
-            personalTruth: personalTruth.trim(),
-            language,
-          })).script
-      step("script_ready", { scriptLength: script.length, reused: canReuseScript })
+      const script = existingScript?.trim() || fallbackTtsScript(personalTruth, language)
+      step("script_reused_for_tts", {
+        language,
+        scriptLength: script.length,
+        wordCount: countWords(script),
+        hasExistingScript: Boolean(existingScript?.trim()),
+      })
+      step("script_ready", {
+        scriptLength: script.length,
+        wordCount: countWords(script),
+        reused: true,
+      })
 
-      await upsertCloneSession(sessionId, {
+      const archive = await upsertCloneSession(sessionId, {
         status: "generating",
         personal_truth: personalTruth.trim(),
         language,
@@ -224,6 +246,9 @@ export async function POST(req: NextRequest) {
         error_message: null,
         consented_at: new Date().toISOString(),
       })
+      if (!archive?.archiveLabel) {
+        console.warn("[analyze-clone] archive label is null after upsert — migration may not be applied", { sessionId })
+      }
 
       try {
         step("tts_start", { voiceIdPrefix: elevenLabsVoiceId.slice(0, 8) })
@@ -244,6 +269,7 @@ export async function POST(req: NextRequest) {
         })
         await upsertCloneSession(sessionId, { tts_audio_path: ttsPath })
         step("tts_uploaded", { ttsPath })
+        step("tts_audio_uploaded", { ttsPath })
 
         const imageUrl = await createSignedAssetUrl(photoStoragePath)
         const audioUrl = await createSignedAssetUrl(ttsPath)
@@ -256,25 +282,69 @@ export async function POST(req: NextRequest) {
           imageField: process.env.REPLICATE_VIDEO_IMAGE_FIELD || "image",
           audioField: process.env.REPLICATE_VIDEO_AUDIO_FIELD || "audio",
         })
-        const video = await generateTalkingHeadVideo({
-          imageUrl,
-          audioUrl,
-          prompt: script,
-        })
+        const video = await (async () => {
+          const maxRetries = 3
+          for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+            try {
+              return await generateTalkingHeadVideo({
+                imageUrl,
+                audioUrl,
+                prompt: script,
+              })
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err)
+              const isTransient = /CUDA|out of memory|GPU|capacity|ResourceExhausted/i.test(msg)
+              if (isTransient && attempt < maxRetries) {
+                step("replicate_retry", { attempt, error: msg })
+                await wait(3000 * attempt)
+                continue
+              }
+              throw err
+            }
+          }
+          throw new Error("Replicate video generation failed after retries.")
+        })()
         step("replicate_done", {
           contentType: video.contentType,
           bytes: video.body.byteLength,
         })
-        await uploadStoredAsset({
-          path: cloneVideoPath,
-          body: video.body,
+        step("clone_upload_start", {
+          cloneVideoPath,
           contentType: video.contentType,
+          bytes: video.body.byteLength,
         })
+        let cloneUploadError: unknown
+        for (let attempt = 1; attempt <= CLONE_UPLOAD_ATTEMPTS; attempt += 1) {
+          try {
+            await uploadStoredAsset({
+              path: cloneVideoPath,
+              body: video.body,
+              contentType: video.contentType,
+            })
+            cloneUploadError = null
+            break
+          } catch (err) {
+            cloneUploadError = err
+            const message =
+              err instanceof Error ? err.message : "Clone video upload failed."
+            if (attempt < CLONE_UPLOAD_ATTEMPTS) {
+              step("clone_upload_retry", { attempt, message })
+              await wait(750 * attempt)
+            } else {
+              step("clone_upload_failed", { attempt, message })
+            }
+          }
+        }
+        if (cloneUploadError) {
+          throw cloneUploadError
+        }
         await upsertCloneSession(sessionId, {
           status: "clone_ready",
           clone_video_path: cloneVideoPath,
         })
         step("clone_uploaded", { cloneVideoPath })
+        const finalArchiveLabel = archive?.archiveLabel ?? null
+        console.log("[analyze-clone] returning archiveLabel:", finalArchiveLabel, "archive:", JSON.stringify(archive))
 
         return {
           status: 200,
@@ -282,6 +352,7 @@ export async function POST(req: NextRequest) {
             script,
             cloneVideoUrl: `/api/session/asset?path=${encodeURIComponent(cloneVideoPath)}`,
             cloneVideoPath,
+            archiveLabel: finalArchiveLabel,
             phase: "clone_uploaded",
             debugSteps,
           },
@@ -304,6 +375,7 @@ export async function POST(req: NextRequest) {
             script,
             cloneVideoUrl: null,
             cloneVideoPath: null,
+            archiveLabel: archive?.archiveLabel ?? null,
             phase: "failed",
             debugSteps,
           },

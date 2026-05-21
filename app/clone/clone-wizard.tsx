@@ -32,6 +32,7 @@ type CloneData = {
   generatedScriptLanguage: string | null
   cloneVideoUrl: string | null
   cloneVideoPath: string | null
+  archiveLabel: string | null
   photoStoragePath: string | null
   audioStoragePath: string | null
   reactionStoragePath: string | null
@@ -134,7 +135,7 @@ function LanguagePicker({
 
 export function CloneWizard() {
   const [step, setStep] = useState(0)
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID())
+  const [sessionId] = useState(() => crypto.randomUUID())
   const [isVoiceRecording, setIsVoiceRecording] = useState(false)
   const [data, setData] = useState<CloneData>({
     photo: null,
@@ -145,6 +146,7 @@ export function CloneWizard() {
     generatedScriptLanguage: null,
     cloneVideoUrl: null,
     cloneVideoPath: null,
+    archiveLabel: null,
     photoStoragePath: null,
     audioStoragePath: null,
     reactionStoragePath: null,
@@ -225,33 +227,21 @@ export function CloneWizard() {
     [data.language, goNext]
   )
 
-  const handleReset = useCallback(() => {
-    setStep(0)
-    setIsVoiceRecording(false)
-    setSessionId(crypto.randomUUID())
-    setData({
-      photo: null,
-      audioRecording: null,
-      personalTruth: "",
-      language: DEFAULT_LANGUAGE,
-      generatedScript: "",
-      generatedScriptLanguage: null,
-      cloneVideoUrl: null,
-      cloneVideoPath: null,
-      photoStoragePath: null,
-      audioStoragePath: null,
-      reactionStoragePath: null,
-      elevenLabsVoiceId: null,
-      elevenLabsVoiceRequiresVerification: false,
-      generationWarning: null,
-    })
-  }, [])
-
   const handlePhotoContinue = useCallback(
     async (blob: Blob) => {
       setData((d) => ({ ...d, photo: blob }))
-      const { path } = await uploadSessionAsset(sessionId, "photo", blob, "photo.png")
-      setData((d) => ({ ...d, photo: blob, photoStoragePath: path }))
+      const { archiveLabel, path } = await uploadSessionAsset(
+        sessionId,
+        "photo",
+        blob,
+        "photo.png"
+      )
+      setData((d) => ({
+        ...d,
+        photo: blob,
+        photoStoragePath: path,
+        archiveLabel: archiveLabel ?? d.archiveLabel,
+      }))
       setStep((s) => s + 1)
     },
     [sessionId]
@@ -265,19 +255,31 @@ export function CloneWizard() {
     ) => {
       onPhase?.("upload")
       setData((d) => ({ ...d, audioRecording: blob }))
-      const { path } = await uploadSessionAsset(sessionId, "voice", blob, "voice.webm")
-      setData((d) => ({ ...d, audioRecording: blob, audioStoragePath: path }))
+      const { archiveLabel, path } = await uploadSessionAsset(
+        sessionId,
+        "voice",
+        blob,
+        "voice.webm"
+      )
+      setData((d) => ({
+        ...d,
+        audioRecording: blob,
+        audioStoragePath: path,
+        archiveLabel: archiveLabel ?? d.archiveLabel,
+      }))
       if (ENABLE_VOICE_CLONE) {
         onPhase?.("clone")
         const { voiceId, requiresVerification } = await cloneVoiceFromBlob(
           sessionId,
           blob,
-          language
+          language,
+          archiveLabel
         )
         setData((d) => ({
           ...d,
           audioRecording: blob,
           audioStoragePath: path,
+          archiveLabel: archiveLabel ?? d.archiveLabel,
           elevenLabsVoiceId: voiceId,
           elevenLabsVoiceRequiresVerification: requiresVerification,
         }))
@@ -298,6 +300,7 @@ export function CloneWizard() {
       generatedScript: string,
       cloneVideoUrl: string | null,
       cloneVideoPath: string | null,
+      archiveLabel: string | null,
       generationWarning?: string | null
     ) => {
       setData((d) => ({
@@ -306,6 +309,7 @@ export function CloneWizard() {
         generatedScriptLanguage: d.language,
         cloneVideoUrl,
         cloneVideoPath,
+        archiveLabel: archiveLabel ?? d.archiveLabel,
         generationWarning: generationWarning ?? null,
       }))
       setStep(5)
@@ -319,18 +323,20 @@ export function CloneWizard() {
 
   return (
     <div className="flex flex-1 flex-col bg-background">
-      <LanguagePicker
-        value={data.language}
-        onChange={handleLanguageChange}
-        disabled={step > 2 || (step === 2 && isVoiceRecording)}
-        label={copy.language.label}
-        ariaLabel={copy.language.ariaLabel}
-        placeholder={copy.language.placeholder}
-      />
+      {step !== 5 && (
+        <LanguagePicker
+          value={data.language}
+          onChange={handleLanguageChange}
+          disabled={step > 2 || (step === 2 && isVoiceRecording)}
+          label={copy.language.label}
+          ariaLabel={copy.language.ariaLabel}
+          placeholder={copy.language.placeholder}
+        />
+      )}
       <Container
         className={
           step === 5
-            ? "flex max-w-none flex-1 flex-col px-3 py-4 md:px-4"
+            ? "flex max-w-none flex-1 flex-col p-0"
             : "flex flex-1 flex-col items-center justify-center py-section"
         }
       >
@@ -400,16 +406,20 @@ export function CloneWizard() {
 
           {step === 5 && (
             <ReactionStep
-              onReset={handleReset}
-              generatedScript={data.generatedScript}
               cloneVideoUrl={data.cloneVideoUrl}
-              generationWarning={data.generationWarning}
+              archiveLabel={data.archiveLabel}
               photo={data.photo}
               sessionId={sessionId}
               copy={copy}
               onReactionUploaded={handleReactionUploaded}
             />
           )}
+
+          {step < 0 || step > 5 ? (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
+            </div>
+          ) : null}
         </div>
       </Container>
     </div>

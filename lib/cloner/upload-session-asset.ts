@@ -3,6 +3,7 @@ export type UploadKind = "photo" | "voice" | "reaction" | "final"
 export type UploadSessionAssetResult = {
   path: string | null
   skipped: boolean
+  archiveLabel: string | null
 }
 
 /**
@@ -18,7 +19,7 @@ export async function uploadSessionAsset(
 ): Promise<UploadSessionAssetResult> {
   const hasPublicUrl = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL)
   if (!hasPublicUrl) {
-    return { path: null, skipped: true }
+    return { path: null, skipped: true, archiveLabel: null }
   }
 
   const formData = new FormData()
@@ -31,11 +32,19 @@ export async function uploadSessionAsset(
     body: formData,
   })
 
-  const data = (await res.json().catch(() => ({}))) as { error?: string; path?: string }
+  const data = (await res.json().catch(() => ({}))) as {
+    archiveLabel?: string | null
+    error?: string
+    path?: string
+  }
 
   if (!res.ok) {
     throw new Error(data.error ?? "Upload failed")
   }
 
-  return { path: data.path ?? null, skipped: false }
+  return {
+    path: data.path ?? null,
+    skipped: false,
+    archiveLabel: data.archiveLabel ?? null,
+  }
 }

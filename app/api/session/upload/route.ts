@@ -131,16 +131,21 @@ export async function POST(req: NextRequest) {
         | "voice_path"
         | "reaction_path"
         | "final_path"
-      await upsertCloneSession(sessionId, {
+      const archive = await upsertCloneSession(sessionId, {
         status: kind === "final" ? "ready" : "draft",
         [pathField === "final_path" ? "final_video_path" : pathField]: objectPath,
         ...(kind === "final" ? { error_message: null } : null),
+      })
+      return NextResponse.json({
+        path: objectPath,
+        bucket,
+        archiveLabel: archive?.archiveLabel ?? null,
       })
     } catch (metadataError) {
       console.warn("Session metadata update skipped:", metadataError)
     }
 
-    return NextResponse.json({ path: objectPath, bucket })
+    return NextResponse.json({ path: objectPath, bucket, archiveLabel: null })
   } catch (e) {
     console.error(e)
     return NextResponse.json({ error: "Upload failed" }, { status: 500 })
