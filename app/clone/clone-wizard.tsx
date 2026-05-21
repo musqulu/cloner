@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react"
 
+import { GlitchInterstitial } from "@/components/cloner/glitch-interstitial"
 import { Container } from "@/components/layout/container"
 import { Text } from "@/components/typography/text"
 import {
@@ -16,6 +17,7 @@ import { ENABLE_VOICE_CLONE } from "@/lib/cloner/flags"
 import { DEFAULT_LANGUAGE, LANGUAGE_OPTIONS } from "@/lib/cloner/languages"
 import { getUiCopy } from "@/lib/cloner/ui-copy"
 import { uploadSessionAsset } from "@/lib/cloner/upload-session-asset"
+import { PasswordStep } from "./steps/password-step"
 import { WelcomeStep } from "./steps/welcome-step"
 import { PhotoStep } from "./steps/photo-step"
 import { VoiceStep } from "./steps/voice-step"
@@ -39,6 +41,12 @@ type CloneData = {
   elevenLabsVoiceId: string | null
   elevenLabsVoiceRequiresVerification: boolean
   generationWarning: string | null
+}
+
+type TransitionState = {
+  messages: readonly string[]
+  finalLabel?: string | null
+  nextStep: number
 }
 
 /** Numbered steps after welcome: details → voice → image. Loading/result are not steps. */
@@ -135,6 +143,7 @@ function LanguagePicker({
 
 export function CloneWizard() {
   const [step, setStep] = useState(0)
+  const [transition, setTransition] = useState<TransitionState | null>(null)
   const [sessionId] = useState(() => crypto.randomUUID())
   const [isVoiceRecording, setIsVoiceRecording] = useState(false)
   const [data, setData] = useState<CloneData>({
@@ -156,7 +165,40 @@ export function CloneWizard() {
   })
   const copy = getUiCopy(data.language)
 
-  const goNext = useCallback(() => setStep((s) => s + 1), [])
+  const beginTransition = useCallback(
+    (
+      messages: readonly string[],
+      nextStep: number,
+      finalLabel?: string | null
+    ) => {
+      setTransition({ messages, nextStep, finalLabel })
+    },
+    []
+  )
+
+  const completeTransition = useCallback(() => {
+    setTransition((current) => {
+      if (current) {
+        setStep(current.nextStep)
+      }
+      return null
+    })
+  }, [])
+
+  const handlePasswordAuthenticated = useCallback(
+    (options?: { withTransition?: boolean }) => {
+      if (options?.withTransition) {
+        beginTransition(copy.transitions.passwordSuccess, 1)
+        return
+      }
+      setStep(1)
+    },
+    [beginTransition, copy.transitions.passwordSuccess]
+  )
+
+  const handleWelcomeNext = useCallback(() => {
+    beginTransition(copy.transitions.welcomeToTruth, 2)
+  }, [beginTransition, copy.transitions.welcomeToTruth])
 
   const handleLanguageChange = useCallback((language: string) => {
     setData((d) => ({
@@ -172,7 +214,7 @@ export function CloneWizard() {
   const handleTruthContinue = useCallback(
     (personalTruth: string) => {
       setData((d) => ({ ...d, personalTruth }))
-      goNext()
+      beginTransition(copy.transitions.truthToVoice, 3)
       void (async () => {
         try {
           const res = await fetch("/api/generate-tts-script", {
@@ -224,7 +266,7 @@ export function CloneWizard() {
         }
       })()
     },
-    [data.language, goNext]
+    [beginTransition, copy.transitions.truthToVoice, data.language]
   )
 
   const handlePhotoContinue = useCallback(
@@ -242,9 +284,13 @@ export function CloneWizard() {
         photoStoragePath: path,
         archiveLabel: archiveLabel ?? d.archiveLabel,
       }))
-      setStep((s) => s + 1)
+      beginTransition(
+        copy.transitions.photoToLoading,
+        5,
+        archiveLabel ?? undefined
+      )
     },
-    [sessionId]
+    [beginTransition, copy.transitions.photoToLoading, sessionId]
   )
 
   const handleVoiceContinue = useCallback(
@@ -290,9 +336,9 @@ export function CloneWizard() {
           elevenLabsVoiceRequiresVerification: false,
         }))
       }
-      setStep((s) => s + 1)
+      beginTransition(copy.transitions.voiceToPhoto, 4)
     },
-    [sessionId]
+    [beginTransition, copy.transitions.voiceToPhoto, sessionId]
   )
 
   const handleLoadingComplete = useCallback(
@@ -312,7 +358,7 @@ export function CloneWizard() {
         archiveLabel: archiveLabel ?? d.archiveLabel,
         generationWarning: generationWarning ?? null,
       }))
-      setStep(5)
+      setStep(6)
     },
     []
   )
@@ -323,11 +369,11 @@ export function CloneWizard() {
 
   return (
     <div className="flex flex-1 flex-col bg-background">
-      {step !== 5 && (
+      {step !== 0 && step !== 6 && (
         <LanguagePicker
           value={data.language}
           onChange={handleLanguageChange}
-          disabled={step > 2 || (step === 2 && isVoiceRecording)}
+          disabled={step > 3 || (step === 3 && isVoiceRecording)}
           label={copy.language.label}
           ariaLabel={copy.language.ariaLabel}
           placeholder={copy.language.placeholder}
@@ -335,28 +381,35 @@ export function CloneWizard() {
       )}
       <Container
         className={
-          step === 5
+          step === 6
             ? "flex max-w-none flex-1 flex-col p-0"
             : "flex flex-1 flex-col items-center justify-center py-section"
         }
       >
-        {step >= 1 && step <= MAIN_STEP_COUNT && (
+        {step >= 2 && step <= 4 && (
           <StepIndicator
-            currentStep={step - 1}
+            currentStep={step - 2}
             totalSteps={MAIN_STEP_COUNT}
           />
         )}
 
         <div
           className={
-            step === 5
+            step === 6
               ? "flex min-h-0 w-full flex-1 flex-col"
               : "w-full max-w-2xl"
           }
         >
-          {step === 0 && <WelcomeStep onNext={goNext} copy={copy} />}
+          {step === 0 && (
+            <PasswordStep
+              copy={copy}
+              onAuthenticated={handlePasswordAuthenticated}
+            />
+          )}
 
-          {step === 1 && (
+          {step === 1 && <WelcomeStep onNext={handleWelcomeNext} copy={copy} />}
+
+          {step === 2 && (
             <TruthStep
               initialValue={data.personalTruth}
               copy={copy}
@@ -367,7 +420,7 @@ export function CloneWizard() {
             />
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <VoiceStep
               onVoiceContinue={handleVoiceContinue}
               language={data.language}
@@ -376,7 +429,7 @@ export function CloneWizard() {
             />
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <PhotoStep
               onPhotoContinue={handlePhotoContinue}
               voiceVerificationNotice={data.elevenLabsVoiceRequiresVerification}
@@ -384,7 +437,7 @@ export function CloneWizard() {
             />
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <LoadingStep
               cloneData={{
                 photo: data.photo,
@@ -404,7 +457,7 @@ export function CloneWizard() {
             />
           )}
 
-          {step === 5 && (
+          {step === 6 && (
             <ReactionStep
               cloneVideoUrl={data.cloneVideoUrl}
               archiveLabel={data.archiveLabel}
@@ -415,13 +468,22 @@ export function CloneWizard() {
             />
           )}
 
-          {step < 0 || step > 5 ? (
+          {step < 0 || step > 6 ? (
             <div className="flex flex-1 items-center justify-center">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
             </div>
           ) : null}
         </div>
       </Container>
+
+      {transition && (
+        <GlitchInterstitial
+          messages={transition.messages}
+          finalLabel={transition.finalLabel}
+          onComplete={completeTransition}
+          className="fixed inset-0 z-[100]"
+        />
+      )}
     </div>
   )
 }

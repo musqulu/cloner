@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useMemo, useState } from "react"
 
 import { useWebcam } from "@/hooks/use-webcam"
+import { GlitchText } from "@/components/cloner/glitch-text"
 import { uploadSessionAsset } from "@/lib/cloner/upload-session-asset"
 import type { UiCopy } from "@/lib/cloner/ui-copy"
 
@@ -577,32 +578,11 @@ export function ReactionStep({
                   <div className="absolute inset-0 flex items-center justify-center bg-[#020202]">
                     <div className="absolute inset-0 ring-1 ring-inset ring-white/10" />
                     {archiveDisplay.text && (
-                      <div
-                        className={`relative px-5 text-center font-mono tracking-normal text-white/90 ${
-                          archiveDisplay.text.startsWith("#")
-                            ? "text-3xl font-medium sm:text-4xl"
-                            : "text-lg font-normal sm:text-xl"
-                        }`}
-                        style={{
-                          filter: archiveDisplay.glitch ? "blur(0.35px)" : "none",
-                          opacity: archiveDisplay.glitch ? 0.82 : 1,
-                          transform: archiveDisplay.glitch
-                            ? `translateX(${Math.sin(archiveClock * 0.08) * 3}px)`
-                            : "translateX(0)",
-                        }}
-                      >
-                        {archiveDisplay.glitch && (
-                          <>
-                            <span className="absolute inset-0 translate-x-1 text-white/30">
-                              {archiveDisplay.text}
-                            </span>
-                            <span className="absolute inset-0 -translate-x-1 text-white/20">
-                              {archiveDisplay.text}
-                            </span>
-                          </>
-                        )}
-                        <span className="relative">{archiveDisplay.text}</span>
-                      </div>
+                      <GlitchText
+                        text={archiveDisplay.text}
+                        glitch={archiveDisplay.glitch}
+                        clock={archiveClock}
+                      />
                     )}
                   </div>
                 )}

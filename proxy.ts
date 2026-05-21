@@ -8,7 +8,8 @@ function isProtected(pathname: string) {
     pathname.startsWith("/favicon.ico") ||
     pathname.startsWith("/models") ||
     pathname.startsWith("/api/auth") ||
-    pathname === "/login"
+    pathname === "/login" ||
+    pathname === "/"
   ) {
     return false
   }
@@ -27,8 +28,8 @@ export function proxy(request: NextRequest) {
   }
 
   const loginUrl = request.nextUrl.clone()
-  loginUrl.pathname = "/login"
-  loginUrl.searchParams.set("next", request.nextUrl.pathname)
+  loginUrl.pathname = "/"
+  loginUrl.search = ""
   return NextResponse.redirect(loginUrl)
 }
 

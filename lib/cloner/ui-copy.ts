@@ -139,6 +139,13 @@ export const UI_COPY = {
       loading: "Odblokowywanie...",
       submit: "Odblokuj",
     },
+    transitions: {
+      passwordSuccess: ["Dostęp przyznany."],
+      welcomeToTruth: ["Protokół aktywny."],
+      truthToVoice: ["Analiza zapisu..."],
+      voiceToPhoto: ["Profil głosu zapisany."],
+      photoToLoading: ["Inicjalizacja klona..."],
+    },
   },
   en: {
     language: {
@@ -270,6 +277,13 @@ export const UI_COPY = {
       failed: "Could not sign in.",
       loading: "Unlocking...",
       submit: "Unlock",
+    },
+    transitions: {
+      passwordSuccess: ["Access granted."],
+      welcomeToTruth: ["Protocol active."],
+      truthToVoice: ["Processing input..."],
+      voiceToPhoto: ["Voice profile archived."],
+      photoToLoading: ["Initializing clone..."],
     },
   },
 } as const
