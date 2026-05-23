@@ -502,10 +502,11 @@ export function ReactionStep({
     }
     recorder.start(250)
     setIsRecording(true)
-    // Mute natively so mobile autoplay policies allow play() after async awaits.
-    // Audio still flows through Web Audio (MediaElementAudioSourceNode bypasses
-    // the element's muted output), so the clone's voice still reaches both the
-    // speakers and the recorded composite.
+    // Mute before play() so mobile autoplay policies allow it after the async
+    // setup above. Once play() resolves we unmute the element:
+    // MediaElementAudioSourceNode honors the element's muted state, so without
+    // this unmute the clone is silent on both the speakers and the recorded
+    // composite.
     cloneVideo.muted = true
     try {
       cloneVideo.currentTime = 0
@@ -517,10 +518,13 @@ export function ReactionStep({
     } catch {
       /* Mobile browsers occasionally refuse load() mid-cycle; play() will retry. */
     }
-    await cloneVideo.play().catch((err) => {
+    try {
+      await cloneVideo.play()
+      cloneVideo.muted = false
+    } catch (err) {
       console.warn("[reaction-step] clone video play failed", err)
       setUploadError(copy.common.uploadReactionError)
-    })
+    }
   }, [archiveDisplayLabel, cloneVideoUrl, videoRef, copy.common.uploadReactionError])
 
   useEffect(() => {
