@@ -3,7 +3,6 @@
 import { useEffect, useRef, useCallback, useMemo, useState } from "react"
 
 import { useWebcam } from "@/hooks/use-webcam"
-import { useIsTouchDevice } from "@/hooks/use-is-touch-device"
 import { GlitchText } from "@/components/cloner/glitch-text"
 import { uploadSessionAsset } from "@/lib/cloner/upload-session-asset"
 import type { UiCopy } from "@/lib/cloner/ui-copy"
@@ -175,7 +174,6 @@ export function ReactionStep({
     permissionDeniedMessage: copy.photo.cameraDenied,
     unavailableMessage: copy.photo.cameraUnavailable,
   })
-  const isTouch = useIsTouchDevice()
   const [isRecording, setIsRecording] = useState(false)
   const [, setRecordingUrl] = useState<string | null>(null)
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null)
@@ -270,14 +268,14 @@ export function ReactionStep({
   }, [clearFallbackTimer, clearPostAvatarTimer])
 
   useEffect(() => {
-    if (cloneVideoUrl || !isRecording) return
+    if (!isRecording) return
     fallbackTimerRef.current = setTimeout(() => {
       finishRecording()
     }, FALLBACK_RECORDING_MS)
     return () => {
       clearFallbackTimer()
     }
-  }, [cloneVideoUrl, isRecording, finishRecording, clearFallbackTimer])
+  }, [isRecording, finishRecording, clearFallbackTimer])
 
   useEffect(() => {
     return () => {
@@ -504,14 +502,24 @@ export function ReactionStep({
     }
     recorder.start(250)
     setIsRecording(true)
+    // Mute natively so mobile autoplay policies allow play() after async awaits.
+    // Audio still flows through Web Audio (MediaElementAudioSourceNode bypasses
+    // the element's muted output), so the clone's voice still reaches both the
+    // speakers and the recorded composite.
+    cloneVideo.muted = true
     try {
       cloneVideo.currentTime = 0
     } catch {
       /* Some streamed videos do not allow seeking before playback starts. */
     }
-    await cloneVideo.play().catch(async () => {
-      cloneVideo.muted = true
-      await cloneVideo.play()
+    try {
+      cloneVideo.load()
+    } catch {
+      /* Mobile browsers occasionally refuse load() mid-cycle; play() will retry. */
+    }
+    await cloneVideo.play().catch((err) => {
+      console.warn("[reaction-step] clone video play failed", err)
+      setUploadError(copy.common.uploadReactionError)
     })
   }, [archiveDisplayLabel, cloneVideoUrl, videoRef, copy.common.uploadReactionError])
 
@@ -588,68 +596,62 @@ export function ReactionStep({
   }, [rawReactionBlob, sessionId, copy.common.uploadRawReactionError])
 
   return (
-    <div className="relative flex h-[100svh] min-h-0 w-full flex-1 flex-col bg-black">
-      <div
-        className={`flex min-h-0 w-full flex-1 ${
-          isTouch ? "flex-col" : "flex-row"
-        }`}
-      >
-        <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
-          <div className="absolute inset-0">
-            {error ? (
-              <div className="h-full w-full bg-black" />
-            ) : (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="h-full w-full object-cover"
-                style={{ transform: "scaleX(-1)" }}
-              />
-            )}
-          </div>
+    <div className="fixed inset-0 z-40 flex flex-col bg-black md:flex-row">
+      <div className="relative h-1/2 w-full overflow-hidden bg-black md:h-full md:w-1/2">
+        <div className="absolute inset-0">
+          {error ? (
+            <div className="h-full w-full bg-black" />
+          ) : (
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="h-full w-full object-cover"
+              style={{ transform: "scaleX(-1)" }}
+            />
+          )}
         </div>
+      </div>
 
-        <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
-          <div className="absolute inset-0">
-            {cloneVideoUrl ? (
-              <>
-                <video
-                  ref={cloneVideoRef}
-                  src={cloneVideoUrl}
-                  crossOrigin="anonymous"
-                  className={`h-full w-full object-cover transition-opacity duration-200 ${
-                    archiveStartedAt === null ? "opacity-100" : "opacity-0"
-                  }`}
-                  playsInline
-                  preload="auto"
-                  onEnded={handleCloneVideoEnded}
-                />
-                {archiveStartedAt !== null && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-[#020202]">
-                    <div className="absolute inset-0 ring-1 ring-inset ring-white/10" />
-                    {archiveDisplay.text && (
-                      <GlitchText
-                        text={archiveDisplay.text}
-                        glitch={archiveDisplay.glitch}
-                        clock={archiveClock}
-                      />
-                    )}
-                  </div>
-                )}
-              </>
-            ) : photoPreviewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={photoPreviewUrl}
-                alt=""
-                className="h-full w-full object-cover"
+      <div className="relative h-1/2 w-full overflow-hidden bg-black md:h-full md:w-1/2">
+        <div className="absolute inset-0">
+          {cloneVideoUrl ? (
+            <>
+              <video
+                ref={cloneVideoRef}
+                src={cloneVideoUrl}
+                crossOrigin="anonymous"
+                className={`h-full w-full object-cover transition-opacity duration-200 ${
+                  archiveStartedAt === null ? "opacity-100" : "opacity-0"
+                }`}
+                playsInline
+                preload="auto"
+                onEnded={handleCloneVideoEnded}
               />
-            ) : (
-              <div className="h-full w-full bg-black" />
-            )}
-          </div>
+              {archiveStartedAt !== null && (
+                <div className="absolute inset-0 flex items-center justify-center bg-[#020202]">
+                  <div className="absolute inset-0 ring-1 ring-inset ring-white/10" />
+                  {archiveDisplay.text && (
+                    <GlitchText
+                      text={archiveDisplay.text}
+                      glitch={archiveDisplay.glitch}
+                      clock={archiveClock}
+                    />
+                  )}
+                </div>
+              )}
+            </>
+          ) : photoPreviewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={photoPreviewUrl}
+              alt=""
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <div className="h-full w-full bg-black" />
+          )}
         </div>
       </div>
 
