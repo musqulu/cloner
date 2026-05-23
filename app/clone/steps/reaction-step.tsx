@@ -543,7 +543,7 @@ export function ReactionStep({
 
   return (
     <div className="relative flex min-h-0 w-full flex-1 flex-col bg-black">
-      <div className="grid min-h-0 w-full flex-1 grid-cols-2 gap-0">
+      <div className="grid min-h-0 w-full flex-1 grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1 gap-0">
         <div className="relative min-h-0 overflow-hidden bg-black">
           <div className="absolute inset-0">
             {error ? (

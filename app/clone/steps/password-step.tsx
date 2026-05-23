@@ -83,7 +83,7 @@ export function PasswordStep({
   }
 
   return (
-    <form onSubmit={onSubmit} className="w-full">
+    <form onSubmit={onSubmit} className="mx-auto w-full max-w-sm">
       <Stack gap="stack" className="items-center text-center">
         <div className="flex size-12 items-center justify-center rounded-lg bg-muted">
           <LockKeyhole className="size-5 text-muted-foreground" />
