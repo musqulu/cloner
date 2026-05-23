@@ -514,11 +514,6 @@ export function ReactionStep({
       /* Some streamed videos do not allow seeking before playback starts. */
     }
     try {
-      cloneVideo.load()
-    } catch {
-      /* Mobile browsers occasionally refuse load() mid-cycle; play() will retry. */
-    }
-    try {
       await cloneVideo.play()
       cloneVideo.muted = false
     } catch (err) {
@@ -601,7 +596,7 @@ export function ReactionStep({
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-black md:flex-row">
-      <div className="relative h-1/2 w-full overflow-hidden bg-black md:h-full md:w-1/2">
+      <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-black">
         <div className="absolute inset-0">
           {error ? (
             <div className="h-full w-full bg-black" />
@@ -618,7 +613,7 @@ export function ReactionStep({
         </div>
       </div>
 
-      <div className="relative h-1/2 w-full overflow-hidden bg-black md:h-full md:w-1/2">
+      <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-black">
         <div className="absolute inset-0">
           {cloneVideoUrl ? (
             <>
