@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useMemo, useState } from "react"
 
 import { useWebcam } from "@/hooks/use-webcam"
+import { useIsTouchDevice } from "@/hooks/use-is-touch-device"
 import { GlitchText } from "@/components/cloner/glitch-text"
 import { uploadSessionAsset } from "@/lib/cloner/upload-session-asset"
 import type { UiCopy } from "@/lib/cloner/ui-copy"
@@ -84,6 +85,27 @@ function getArchiveDisplayState(
   }
 }
 
+const RECORDER_MIME_CANDIDATES = [
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm",
+  "video/mp4;codecs=h264,aac",
+  "video/mp4",
+] as const
+
+function pickRecorderMimeType(): string | null {
+  if (typeof MediaRecorder === "undefined") return null
+  for (const candidate of RECORDER_MIME_CANDIDATES) {
+    if (MediaRecorder.isTypeSupported(candidate)) return candidate
+  }
+  return null
+}
+
+function blobTypeFor(mime: string | null): string {
+  if (!mime) return "video/webm"
+  return mime.split(";")[0]?.trim() || "video/webm"
+}
+
 function drawArchivePane(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -153,6 +175,7 @@ export function ReactionStep({
     permissionDeniedMessage: copy.photo.cameraDenied,
     unavailableMessage: copy.photo.cameraUnavailable,
   })
+  const isTouch = useIsTouchDevice()
   const [isRecording, setIsRecording] = useState(false)
   const [, setRecordingUrl] = useState<string | null>(null)
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null)
@@ -395,14 +418,32 @@ export function ReactionStep({
       /* Keep a silent composite rather than failing the final recording. */
     }
 
-    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-      ? "video/webm;codecs=vp9,opus"
-      : "video/webm"
-    const recorder = new MediaRecorder(canvasStream, {
-      mimeType,
+    const mimeType = pickRecorderMimeType()
+    const blobType = blobTypeFor(mimeType)
+
+    const recorderOptions: MediaRecorderOptions = {
       videoBitsPerSecond: 3_000_000,
       audioBitsPerSecond: 128_000,
-    })
+    }
+    if (mimeType) recorderOptions.mimeType = mimeType
+
+    let recorder: MediaRecorder
+    try {
+      recorder = new MediaRecorder(canvasStream, recorderOptions)
+    } catch (err) {
+      console.warn("[reaction-step] composite recorder unsupported", err)
+      setUploadError(copy.common.uploadReactionError)
+      recordingStartedRef.current = false
+      if (drawFrameRef.current) {
+        cancelAnimationFrame(drawFrameRef.current)
+        drawFrameRef.current = null
+      }
+      micStreamRef.current?.getTracks().forEach((track) => track.stop())
+      micStreamRef.current = null
+      audioContextRef.current?.close().catch(() => {})
+      audioContextRef.current = null
+      return
+    }
     mediaRecorderRef.current = recorder
 
     const captureStream = (
@@ -420,20 +461,25 @@ export function ReactionStep({
       micStream
         ?.getAudioTracks()
         .forEach((track) => rawStream.addTrack(track))
-      const rawRecorder = new MediaRecorder(rawStream, {
-        mimeType,
+      const rawOptions: MediaRecorderOptions = {
         videoBitsPerSecond: 1_500_000,
         audioBitsPerSecond: 96_000,
-      })
-      rawReactionRecorderRef.current = rawRecorder
-      rawRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) rawReactionChunksRef.current.push(e.data)
       }
-      rawRecorder.onstop = () => {
-        const blob = new Blob(rawReactionChunksRef.current, { type: mimeType })
-        setRawReactionBlob(blob)
+      if (mimeType) rawOptions.mimeType = mimeType
+      try {
+        const rawRecorder = new MediaRecorder(rawStream, rawOptions)
+        rawReactionRecorderRef.current = rawRecorder
+        rawRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) rawReactionChunksRef.current.push(e.data)
+        }
+        rawRecorder.onstop = () => {
+          const blob = new Blob(rawReactionChunksRef.current, { type: blobType })
+          setRawReactionBlob(blob)
+        }
+        rawRecorder.start(250)
+      } catch (err) {
+        console.warn("[reaction-step] raw recorder unsupported", err)
       }
-      rawRecorder.start(250)
     }
 
     recorder.ondataavailable = (e) => {
@@ -448,16 +494,16 @@ export function ReactionStep({
       micStreamRef.current = null
       audioContextRef.current?.close().catch(() => {})
       audioContextRef.current = null
-      const blob = new Blob(chunksRef.current, { type: mimeType })
+      const blob = new Blob(chunksRef.current, { type: blobType })
       setRecordingBlob(blob)
       setRecordingUrl(URL.createObjectURL(blob))
     }
 
-    recorder.start(250)
-    setIsRecording(true)
     if (audioContextRef.current?.state === "suspended") {
       await audioContextRef.current.resume().catch(() => {})
     }
+    recorder.start(250)
+    setIsRecording(true)
     try {
       cloneVideo.currentTime = 0
     } catch {
@@ -467,7 +513,7 @@ export function ReactionStep({
       cloneVideo.muted = true
       await cloneVideo.play()
     })
-  }, [archiveDisplayLabel, cloneVideoUrl, videoRef])
+  }, [archiveDisplayLabel, cloneVideoUrl, videoRef, copy.common.uploadReactionError])
 
   useEffect(() => {
     if (!isActive || !cloneVideoUrl) return
@@ -542,8 +588,12 @@ export function ReactionStep({
   }, [rawReactionBlob, sessionId, copy.common.uploadRawReactionError])
 
   return (
-    <div className="relative flex min-h-0 w-full flex-1 flex-col bg-black">
-      <div className="flex min-h-0 w-full flex-1 flex-col sm:flex-row">
+    <div className="relative flex h-[100svh] min-h-0 w-full flex-1 flex-col bg-black">
+      <div
+        className={`flex min-h-0 w-full flex-1 ${
+          isTouch ? "flex-col" : "flex-row"
+        }`}
+      >
         <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
           <div className="absolute inset-0">
             {error ? (
