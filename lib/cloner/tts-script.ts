@@ -12,6 +12,7 @@ const scriptFlights = new Map<string, Promise<TtsScriptResult>>()
 const LANGUAGE_LABELS: Record<string, string> = {
   en: "English",
   pl: "Polish",
+  ru: "Russian",
 }
 
 export const MIN_TRUTH_LENGTH = 50
@@ -21,10 +22,12 @@ export function buildTtsScriptPrompt(
   languageCode: string
 ): string {
   const langName = LANGUAGE_LABELS[languageCode] ?? languageCode
-  const polishInstruction =
+  const langInstruction =
     languageCode === "pl"
       ? "\nFor Polish: use natural contemporary Polish, Polish punctuation, and Polish phrasing. Do not translate literally from English."
-      : ""
+      : languageCode === "ru"
+        ? "\nFor Russian: use natural contemporary Russian, Cyrillic script, and Russian phrasing. Do not translate literally from English."
+        : ""
 
   return `You are generating a short synthetic statement for an experimental art project about identity, AI, and digital selfhood.
 
@@ -90,7 +93,7 @@ The emotional effect should be:
 
 The text should sound like a real person casually speaking to a webcam alone at night.
 
-Write in ${langName}.${polishInstruction}
+Write in ${langName}.${langInstruction}
 Plain text only. Output only the statement, nothing else.
 `
 }

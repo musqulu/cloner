@@ -11,4 +11,9 @@ export const READINGS: Record<
     passage:
       "The only way to do great work is to love what you do. If you haven't found it yet, keep looking. Don't settle. As with all matters of the heart, you'll know when you find it.",
   },
+  ru: {
+    passage:
+      "Я помню чудное мгновенье: передо мной явилась ты, как мимолётное виденье, как гений чистой красоты. В томленьях грусти безнадежной, в тревогах шумной суеты, звучал мне долго голос нежный и снились милые черты.",
+    attribution: "Александр Пушкин, «К ***»",
+  },
 }
