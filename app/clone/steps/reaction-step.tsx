@@ -157,6 +157,7 @@ export function ReactionStep({
   const [, setRecordingUrl] = useState<string | null>(null)
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null)
   const [rawReactionBlob, setRawReactionBlob] = useState<Blob | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const rawReactionRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -492,6 +493,7 @@ export function ReactionStep({
 
     ;(async () => {
       try {
+        setUploadError(null)
         const filename =
           recordingBlob.type.includes("mp4") ? "final.mp4" : "final.webm"
         const { path, skipped } = await uploadSessionAsset(
@@ -504,10 +506,10 @@ export function ReactionStep({
         onReactionUploaded?.(skipped ? null : path)
       } catch (err) {
         if (gen !== uploadGenRef.current) return
-        console.warn(
-          "[reaction-step] final upload failed",
+        const message =
           err instanceof Error ? err.message : copy.common.uploadReactionError
-        )
+        console.warn("[reaction-step] final upload failed", message)
+        setUploadError(message)
         onReactionUploaded?.(null)
       }
     })()
@@ -540,7 +542,7 @@ export function ReactionStep({
   }, [rawReactionBlob, sessionId, copy.common.uploadRawReactionError])
 
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col bg-black">
+    <div className="relative flex min-h-0 w-full flex-1 flex-col bg-black">
       <div className="grid min-h-0 w-full flex-1 grid-cols-2 gap-0">
         <div className="relative min-h-0 overflow-hidden bg-black">
           <div className="absolute inset-0">
@@ -607,6 +609,12 @@ export function ReactionStep({
         height={COMPOSITE_HEIGHT}
         className="hidden"
       />
+
+      {uploadError && (
+        <div className="absolute inset-x-0 bottom-0 z-10 bg-red-950/90 px-4 py-3 text-center text-sm text-red-200">
+          {uploadError}
+        </div>
+      )}
     </div>
   )
 }
