@@ -140,3 +140,45 @@ Verification status:
 
     </proposed_plan>
 
+## 2026-05-23 Handoff
+
+What was done this session (all committed and pushed to `main` as `de90f57`):
+
+### 1. Mobile layout for final reaction screen
+- `app/clone/steps/reaction-step.tsx` line 546.
+- First attempt changed `grid-cols-2` → `grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1` so the two videos stack on mobile (top/bottom) and stay side-by-side on `sm+`. Visually fine.
+- That CSS change broke the **composite recording**: clone video was black on the right half of the saved `final.webm` on mobile (desktop still fine).
+- Root cause: `grid-template-rows: repeat(2, minmax(0, 1fr))` needs the grid container to have a defined height. The grid's children use `absolute inset-0`, so they contribute zero to the grid's intrinsic height. On iOS Safari this collapses both row tracks to 0px → video elements have 0 CSS height → iOS Safari stops delivering frames to canvas → `ctx.drawImage(cloneVideo)` paints black.
+- Final fix: replaced the grid with flex. Now line 546:
+  ```jsx
+  <div className="flex min-h-0 w-full flex-1 flex-col sm:flex-row">
+  ```
+  And each video cell (lines 547, 564) got `flex-1` added:
+  ```jsx
+  <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+  ```
+- Canvas recording logic (1920×1080 side-by-side via `drawVideoContain` at `COMPOSITE_WIDTH/2` offset) was NOT touched.
+
+### 2. Added Russian as a third language
+- `lib/cloner/languages.ts`: added `{ code: "ru", label: "Русский" }` to `LANGUAGE_OPTIONS`. `LanguageCode` auto-expands.
+- `lib/cloner/ui-copy.ts`: added full `ru` block matching the shape of `pl` and `en` (welcome/truth/voice/photo/loading/reaction/login/transitions/common/language all translated).
+- `lib/cloner/readings.ts`: added `ru` passage — Pushkin "К ***" (two stanzas of "Я помню чудное мгновенье"), with attribution.
+- `lib/cloner/tts-script.ts`:
+  - Added `ru: "Russian"` to `LANGUAGE_LABELS`.
+  - Renamed local `polishInstruction` → `langInstruction`, extended ternary to also emit a Russian-specific instruction when `languageCode === "ru"`.
+  - No fallback script written for Russian (per user request: "do not create fallback scenarios for this language"). If Replicate fails for `ru`, `fallbackTtsScript()` returns the English fallback string.
+
+### 3. Pre-existing password-step change
+Also committed (was already in working tree at session start): `app/clone/steps/password-step.tsx` form now uses `mx-auto w-full max-w-sm` instead of `w-full`. Not work I did, just rolled into the commits.
+
+## What still does not work
+Nothing new identified this session. The mobile composite-recording bug was the one regression caused by my first layout attempt, and the flex rewrite is the fix. Should be verified on a real iOS device (only verified by reasoning, not by running on hardware in this session).
+
+## Verification status
+- Not run this session — no lint, typecheck, or build attempts. Changes are pure CSS class swaps plus additive language data (new object key, new switch branch). Low risk of typecheck breakage but worth running `npx tsc --noEmit` and `npm run build` before next deploy.
+
+## Likely next priorities
+- Verify on a real iPhone that the saved `final.webm` shows both halves filled when recorded on mobile.
+- Test the Russian flow end-to-end (truth → voice with Pushkin passage → TTS script → clone video).
+- Carry forward the priorities from the 2026-05-17 handoff that are still open (archive number display, Sonnet prompt quality, error-page flash).
+
