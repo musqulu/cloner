@@ -84,27 +84,6 @@ function getArchiveDisplayState(
   }
 }
 
-const RECORDER_MIME_CANDIDATES = [
-  "video/webm;codecs=vp9,opus",
-  "video/webm;codecs=vp8,opus",
-  "video/webm",
-  "video/mp4;codecs=h264,aac",
-  "video/mp4",
-] as const
-
-function pickRecorderMimeType(): string | null {
-  if (typeof MediaRecorder === "undefined") return null
-  for (const candidate of RECORDER_MIME_CANDIDATES) {
-    if (MediaRecorder.isTypeSupported(candidate)) return candidate
-  }
-  return null
-}
-
-function blobTypeFor(mime: string | null): string {
-  if (!mime) return "video/webm"
-  return mime.split(";")[0]?.trim() || "video/webm"
-}
-
 function drawArchivePane(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -268,14 +247,14 @@ export function ReactionStep({
   }, [clearFallbackTimer, clearPostAvatarTimer])
 
   useEffect(() => {
-    if (!isRecording) return
+    if (cloneVideoUrl || !isRecording) return
     fallbackTimerRef.current = setTimeout(() => {
       finishRecording()
     }, FALLBACK_RECORDING_MS)
     return () => {
       clearFallbackTimer()
     }
-  }, [isRecording, finishRecording, clearFallbackTimer])
+  }, [cloneVideoUrl, isRecording, finishRecording, clearFallbackTimer])
 
   useEffect(() => {
     return () => {
@@ -416,32 +395,14 @@ export function ReactionStep({
       /* Keep a silent composite rather than failing the final recording. */
     }
 
-    const mimeType = pickRecorderMimeType()
-    const blobType = blobTypeFor(mimeType)
-
-    const recorderOptions: MediaRecorderOptions = {
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+      ? "video/webm;codecs=vp9,opus"
+      : "video/webm"
+    const recorder = new MediaRecorder(canvasStream, {
+      mimeType,
       videoBitsPerSecond: 3_000_000,
       audioBitsPerSecond: 128_000,
-    }
-    if (mimeType) recorderOptions.mimeType = mimeType
-
-    let recorder: MediaRecorder
-    try {
-      recorder = new MediaRecorder(canvasStream, recorderOptions)
-    } catch (err) {
-      console.warn("[reaction-step] composite recorder unsupported", err)
-      setUploadError(copy.common.uploadReactionError)
-      recordingStartedRef.current = false
-      if (drawFrameRef.current) {
-        cancelAnimationFrame(drawFrameRef.current)
-        drawFrameRef.current = null
-      }
-      micStreamRef.current?.getTracks().forEach((track) => track.stop())
-      micStreamRef.current = null
-      audioContextRef.current?.close().catch(() => {})
-      audioContextRef.current = null
-      return
-    }
+    })
     mediaRecorderRef.current = recorder
 
     const captureStream = (
@@ -459,25 +420,20 @@ export function ReactionStep({
       micStream
         ?.getAudioTracks()
         .forEach((track) => rawStream.addTrack(track))
-      const rawOptions: MediaRecorderOptions = {
+      const rawRecorder = new MediaRecorder(rawStream, {
+        mimeType,
         videoBitsPerSecond: 1_500_000,
         audioBitsPerSecond: 96_000,
+      })
+      rawReactionRecorderRef.current = rawRecorder
+      rawRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) rawReactionChunksRef.current.push(e.data)
       }
-      if (mimeType) rawOptions.mimeType = mimeType
-      try {
-        const rawRecorder = new MediaRecorder(rawStream, rawOptions)
-        rawReactionRecorderRef.current = rawRecorder
-        rawRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) rawReactionChunksRef.current.push(e.data)
-        }
-        rawRecorder.onstop = () => {
-          const blob = new Blob(rawReactionChunksRef.current, { type: blobType })
-          setRawReactionBlob(blob)
-        }
-        rawRecorder.start(250)
-      } catch (err) {
-        console.warn("[reaction-step] raw recorder unsupported", err)
+      rawRecorder.onstop = () => {
+        const blob = new Blob(rawReactionChunksRef.current, { type: mimeType })
+        setRawReactionBlob(blob)
       }
+      rawRecorder.start(250)
     }
 
     recorder.ondataavailable = (e) => {
@@ -492,40 +448,26 @@ export function ReactionStep({
       micStreamRef.current = null
       audioContextRef.current?.close().catch(() => {})
       audioContextRef.current = null
-      const blob = new Blob(chunksRef.current, { type: blobType })
+      const blob = new Blob(chunksRef.current, { type: mimeType })
       setRecordingBlob(blob)
       setRecordingUrl(URL.createObjectURL(blob))
     }
 
+    recorder.start(250)
+    setIsRecording(true)
     if (audioContextRef.current?.state === "suspended") {
       await audioContextRef.current.resume().catch(() => {})
     }
-    recorder.start(250)
-    setIsRecording(true)
-    // Mute before play() so mobile autoplay policies allow it after the async
-    // setup above. Once play() resolves we unmute the element:
-    // MediaElementAudioSourceNode honors the element's muted state, so without
-    // this unmute the clone is silent on both the speakers and the recorded
-    // composite.
-    cloneVideo.muted = true
     try {
       cloneVideo.currentTime = 0
     } catch {
       /* Some streamed videos do not allow seeking before playback starts. */
     }
-    try {
-      cloneVideo.load()
-    } catch {
-      /* Mobile browsers occasionally refuse load() mid-cycle; play() will retry. */
-    }
-    try {
+    await cloneVideo.play().catch(async () => {
+      cloneVideo.muted = true
       await cloneVideo.play()
-      cloneVideo.muted = false
-    } catch (err) {
-      console.warn("[reaction-step] clone video play failed", err)
-      setUploadError(copy.common.uploadReactionError)
-    }
-  }, [archiveDisplayLabel, cloneVideoUrl, videoRef, copy.common.uploadReactionError])
+    })
+  }, [archiveDisplayLabel, cloneVideoUrl, videoRef])
 
   useEffect(() => {
     if (!isActive || !cloneVideoUrl) return
@@ -600,62 +542,64 @@ export function ReactionStep({
   }, [rawReactionBlob, sessionId, copy.common.uploadRawReactionError])
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-black md:flex-row">
-      <div className="relative h-1/2 w-full overflow-hidden bg-black md:h-full md:w-1/2">
-        <div className="absolute inset-0">
-          {error ? (
-            <div className="h-full w-full bg-black" />
-          ) : (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="h-full w-full object-cover"
-              style={{ transform: "scaleX(-1)" }}
-            />
-          )}
-        </div>
-      </div>
-
-      <div className="relative h-1/2 w-full overflow-hidden bg-black md:h-full md:w-1/2">
-        <div className="absolute inset-0">
-          {cloneVideoUrl ? (
-            <>
+    <div className="relative flex min-h-0 w-full flex-1 flex-col bg-black">
+      <div className="flex min-h-0 w-full flex-1 flex-col sm:flex-row">
+        <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+          <div className="absolute inset-0">
+            {error ? (
+              <div className="h-full w-full bg-black" />
+            ) : (
               <video
-                ref={cloneVideoRef}
-                src={cloneVideoUrl}
-                crossOrigin="anonymous"
-                className={`h-full w-full object-cover transition-opacity duration-200 ${
-                  archiveStartedAt === null ? "opacity-100" : "opacity-0"
-                }`}
+                ref={videoRef}
+                autoPlay
                 playsInline
-                preload="auto"
-                onEnded={handleCloneVideoEnded}
+                muted
+                className="h-full w-full object-cover"
+                style={{ transform: "scaleX(-1)" }}
               />
-              {archiveStartedAt !== null && (
-                <div className="absolute inset-0 flex items-center justify-center bg-[#020202]">
-                  <div className="absolute inset-0 ring-1 ring-inset ring-white/10" />
-                  {archiveDisplay.text && (
-                    <GlitchText
-                      text={archiveDisplay.text}
-                      glitch={archiveDisplay.glitch}
-                      clock={archiveClock}
-                    />
-                  )}
-                </div>
-              )}
-            </>
-          ) : photoPreviewUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={photoPreviewUrl}
-              alt=""
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <div className="h-full w-full bg-black" />
-          )}
+            )}
+          </div>
+        </div>
+
+        <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+          <div className="absolute inset-0">
+            {cloneVideoUrl ? (
+              <>
+                <video
+                  ref={cloneVideoRef}
+                  src={cloneVideoUrl}
+                  crossOrigin="anonymous"
+                  className={`h-full w-full object-cover transition-opacity duration-200 ${
+                    archiveStartedAt === null ? "opacity-100" : "opacity-0"
+                  }`}
+                  playsInline
+                  preload="auto"
+                  onEnded={handleCloneVideoEnded}
+                />
+                {archiveStartedAt !== null && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-[#020202]">
+                    <div className="absolute inset-0 ring-1 ring-inset ring-white/10" />
+                    {archiveDisplay.text && (
+                      <GlitchText
+                        text={archiveDisplay.text}
+                        glitch={archiveDisplay.glitch}
+                        clock={archiveClock}
+                      />
+                    )}
+                  </div>
+                )}
+              </>
+            ) : photoPreviewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={photoPreviewUrl}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="h-full w-full bg-black" />
+            )}
+          </div>
         </div>
       </div>
 
