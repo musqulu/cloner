@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 .cursor/
+memory.md
+credentials.json
+*service-account*.json
 
 # debug
 npm-debug.log*
