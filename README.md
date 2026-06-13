@@ -2,6 +2,8 @@
 
 An interactive art-installation web app that turns a participant's confession, voice sample, and photo into a personalized talking-head video, then records their live reaction in a side-by-side composite.
 
+![Reaction composite — participant webcam (left) and AI clone (right)](docs/readme-screenshot.png)
+
 This is an **experimental MVP** — some pipeline steps (notably the final composite upload) are still being refined.
 
 ## Features
